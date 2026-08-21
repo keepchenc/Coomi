@@ -257,7 +257,9 @@ def coomiRustup = System.getenv("COOMI_RUSTUP") ?: "rustup"
 tasks.register("installCoomiRustAndroidTarget", Exec) {
     group = "coomi build"
     description = "Install the Rust ARM64 Android standard library."
-    commandLine coomiRustup, "target", "add", coomiRustTarget
+<<<<<<< HEAD
+    commandLine coomiRustup, "target", "add", "--toolchain",
+        System.getenv("COOMI_RUSTUP_TOOLCHAIN") ?: "stable", coomiRustTarget
 }
 
 tasks.register("buildCoomiWeb", Exec) {
@@ -303,6 +305,7 @@ tasks.register("buildCoomiRustAndroid", Exec) {
     workingDir coomiRustRoot
     commandLine coomiCargo, "build", "--release", "--locked",
         "--target", coomiRustTarget, "-p", "coomi-ui", "--bin", "coomi"
+    environment "RUSTUP_TOOLCHAIN", System.getenv("COOMI_RUSTUP_TOOLCHAIN") ?: "stable"
     environment "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", coomiAndroidLinker.absolutePath
     environment "CC_aarch64_linux_android", coomiAndroidLinker.absolutePath
     environment "AR_aarch64_linux_android", coomiAndroidAr.absolutePath

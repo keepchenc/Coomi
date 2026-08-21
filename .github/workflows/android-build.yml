@@ -37,6 +37,16 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Pin rustup toolchain and ensure Android target
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add aarch64-linux-android
+          rustup target list --installed | grep aarch64-linux-android
+          rustc --version
+          rustc --print sysroot
+          ls "$(rustc --print sysroot)/lib/rustlib/" | grep aarch64 || echo "NO_AARCH64_IN_SYSROOT"
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
