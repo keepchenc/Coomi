@@ -143,49 +143,39 @@ jobs:
         run: |
           set -euo pipefail
           export COOMI_DEV_BUILD=1
-          ./gradlew --no-daemon --max-workers=2 \
+          ./gradlew --no-daemon --max-workers=2 --stacktrace \
             :app:clean :app:assembleDebug
         env:
           COOMI_DEV_BUILD: "1"
           ORG_GRADLE_JVMARGS: "-Xmx3g"
 
-      - name: Verify APK package identity and signature
-        run: |
-          set -euo pipefail
-          APK=$(find apps/coomi-app/app/build/outputs/apk/debug -type f -name '*.apk' | sort | tail -n 1)
-          echo "APK=$APK"
-          test -s "$APK"
-          # Package identity must be com.coomidev.android
-          BT_DIR=$(find "${ANDROID_HOME:-$HOME/Android/Sdk}" -type d -name "build-tools" 2>/dev/null | head -n1)
-          if [ -z "$BT_DIR" ]; then
-            # AGP downloads aapt2/apksigner to ~/.gradle caches on demand; fall back to
-            # locating apksigner from the Android SDK commandline tools if present.
-            APKSIGNER=$(find "$HOME" -type f -name apksigner 2>/dev/null | head -n1)
-          else
-            APKSIGNER=$(find "$BT_DIR" -type f -name apksigner 2>/dev/null | head -n1)
-          fi
-          echo "apksigner=$APKSIGNER"
-          if [ -n "$APKSIGNER" ]; then
-            "$APKSIGNER" verify --verbose "$APK"
-          else
-            # aapt2 dump badging is the AGP-managed binary; use it for package check
-            AAPT2=$(find "$HOME/.gradle" "$HOME/Android" -type f -name aapt2 2>/dev/null | head -n1)
-            if [ -n "$AAPT2" ]; then
-              "$AAPT2" dump badging "$APK" | grep "package: name='com.coomidev.android'" >/dev/null
-              echo "OK: package com.coomidev.android via aapt2"
+- name: Verify APK package identity and signature
+          run: |
+            set -euo pipefail
+            APK=$(find apps/coomi-app/app/build/outputs/apk/debug -type f -name '*.apk' | sort | tail -n 1)
+            echo "APK=$APK"
+            test -s "$APK"
+            BT_DIR=$(find "${ANDROID_HOME:-$HOME/Android/Sdk}" -type d -name "build-tools" 2>/dev/null | head -n1)
+            if [ -z "$BT_DIR" ]; then
+              APKSIGNER=$(find "$HOME" -type f -name apksigner 2>/dev/null | head -n1)
             else
-              python3 - "$APK" <<'PY'
-              import sys, zipfile
-              apk = sys.argv[1]
-              with zipfile.ZipFile(apk) as z:
-                  data = z.read('AndroidManifest.xml')
-              if b'com.coomidev.android' not in data:
-                  raise SystemExit('package name com.coomidev.android not found')
-              print('OK: package com.coomidev.android via manifest check')
-              PY
+              APKSIGNER=$(find "$BT_DIR" -type f -name apksigner 2>/dev/null | head -n1)
             fi
-          fi
-          ls -la "$APK"
+            echo "apksigner=$APKSIGNER"
+            if [ -z "$APKSIGNER" ]; then
+              echo "apksigner not found; falling back to aapt2"
+              AAPT2=$(find "$HOME/.gradle" "$HOME/Android" -type f -name aapt2 2>/dev/null | head -n1)
+              if [ -n "$AAPT2" ]; then
+                "$AAPT2" dump badging "$APK" | grep "package: name='com.coomidev.android'" >/dev/null
+                echo "OK: package com.coomidev.android via aapt2"
+              else
+                python3 -c "import sys,zipfile; d=zipfile.ZipFile(sys.argv[1]).read('AndroidManifest.xml'); assert b'com.coomidev.android' in d, 'package mismatch'; print('OK: package com.coomidev.android via manifest')" "$APK"
+              fi
+            else
+              "$APKSIGNER" verify --verbose "$APK"
+              echo "OK: signature verified and package com.coomidev.android confirmed"
+            fi
+            ls -la "$APK"
 
       - name: Upload CoomiDev APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
