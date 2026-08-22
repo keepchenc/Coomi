@@ -97,6 +97,24 @@ jobs:
           echo "--- installed SDK packages ---"
           "$SDKM" --list_installed || "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --list_installed || true
 
+      # The APK embeds an official Termux bootstrap (references/termux-bootstrap/
+      # is intentionally not in git). Download it for the build; the bootstrap
+      # carries com.coomi.android in $PREFIX (see build.gradle note about the
+      # package-name caveat) and core tools + bash work, matching upstream docs.
+      - name: Download Termux bootstrap (aarch64)
+        run: |
+          set -euo pipefail
+          mkdir -p references/termux-bootstrap
+          # Latest stable bootstrap for aarch64 from Termux releases.
+          # URL pattern: https://github.com/termux/termux-packages/releases/download/bootstrap-<date>/bootstrap-aarch64.zip
+          # Prefer the GitHub API latest release to avoid hardcoding a date.
+          LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/termux/termux-packages/releases/latest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'])")
+          echo "Latest termux release: $LATEST_TAG"
+          curl -fsSL -o references/termux-bootstrap/bootstrap-aarch64.zip \
+            "https://github.com/termux/termux-packages/releases/download/${LATEST_TAG}/bootstrap-aarch64.zip"
+          ls -la references/termux-bootstrap/
+          test -s references/termux-bootstrap/bootstrap-aarch64.zip
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
