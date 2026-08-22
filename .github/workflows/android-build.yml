@@ -1,0 +1,214 @@
+name: Build CoomiDev APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch/tag) to build"
+        required: false
+        default: "codex/ci-coomidev-linux-build"
+      upload_apk:
+        description: "Upload CoomiDev APK artifact"
+        required: false
+        default: true
+        type: boolean
+  push:
+    branches: [codex/ci-coomidev-linux-build]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Pin rustup toolchain and ensure Android target
+        run: |
+          set -euo pipefail
+          rustup default stable
+          rustup target add aarch64-linux-android
+          rustup target list --installed | grep aarch64-linux-android
+          rustc --version
+          rustc --print sysroot
+          ls "$(rustc --print sysroot)/lib/rustlib/" | grep aarch64 || echo "NO_AARCH64_IN_SYSROOT"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/web/node_modules
+          key: npm-${{ hashFiles('apps/web/package-lock.json') }}
+          restore-keys: npm-
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/coomi-rs/target
+          key: cargo-${{ hashFiles('apps/coomi-rs/Cargo.lock') }}
+          restore-keys: cargo-
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      # The Android SDK Commandline Tools provide a Linux x86_64 aapt2 via the
+      # AGP maven artifact. On this CI (x86_64 host) the default AGP aapt2 is
+      # used; no aapt2FromMavenOverride is required.
+      - name: Set up Android SDK (platform 36 + NDK 27.0.12077973)
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          SDKM="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then
+            SDKM="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          # sdkmanager needs java; the runner already has a JDK
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          "$SDKM" "platforms;android-36" "ndk;27.0.12077973" "build-tools;36.0.0" >/dev/null
+          echo "--- installed SDK packages ---"
+          "$SDKM" --list_installed || "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --list_installed || true
+
+      # The APK embeds an official Termux bootstrap (references/termux-bootstrap/
+      # is intentionally not in git). Download it for the build; the bootstrap
+      # carries com.coomi.android in $PREFIX (see build.gradle note about the
+      # package-name caveat) and core tools + bash work, matching upstream docs.
+      - name: Download Termux bootstrap (aarch64)
+        run: |
+          set -euo pipefail
+          mkdir -p references/termux-bootstrap
+          # Latest stable bootstrap for aarch64 from Termux releases.
+          # URL pattern: https://github.com/termux/termux-packages/releases/download/bootstrap-<date>/bootstrap-aarch64.zip
+          # Prefer the GitHub API latest release to avoid hardcoding a date.
+          LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/termux/termux-packages/releases/latest" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'])")
+          echo "Latest termux release: $LATEST_TAG"
+          curl -fsSL -o references/termux-bootstrap/bootstrap-aarch64.zip \
+            "https://github.com/termux/termux-packages/releases/download/${LATEST_TAG}/bootstrap-aarch64.zip"
+          ls -la references/termux-bootstrap/
+          test -s references/termux-bootstrap/bootstrap-aarch64.zip
+
+      # Download the verified Runtime V2 artifacts (PRoot host + Debian rootfs) so
+      # stageCoomiRuntimeV2 can bundle them as APK assets for OFFLINE installation.
+      # Without these, runtime-v2-dist/ is empty (gitignored) and the APK would rely
+      # on a GitHub download at runtime, which fails in restricted networks.
+      - name: Download Runtime V2 offline artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-v2-dist
+          BASE="https://github.com/TensorHub-ORG/Coomi/releases/download/runtime-v2-debian-bookworm-20260803"
+          curl -fL -o runtime-v2-dist/proot-host-arm64.tar.gz \
+            "${BASE}/proot-host-arm64.tar.gz"
+          curl -fL -o runtime-v2-dist/debian-bookworm-arm64.tar.gz \
+            "${BASE}/debian-bookworm-arm64.tar.gz"
+          echo "--- Runtime V2 artifacts ---"
+          ls -la runtime-v2-dist/
+          test -s runtime-v2-dist/proot-host-arm64.tar.gz
+          test -s runtime-v2-dist/debian-bookworm-arm64.tar.gz
+          echo "${BASE}" > runtime-v2-dist/.base-url
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Generate ephemeral signing keystore (CI)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keys"
+          KS="$RUNNER_TEMP/keys/coomidev-ci.jks"
+          STORE_PASS="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          KEY_PASS="$STORE_PASS"
+          keytool -genkeypair \
+            -v \
+            -keystore "$KS" \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
+            -alias alias \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 3650 \
+            -dname "CN=CoomiDev CI, OU=Mobile, O=Coomi, L=Beijing, ST=Beijing, C=CN"
+          echo "COOMI_SIGNING_KEYSTORE=$KS" >> "$GITHUB_ENV"
+          echo "COOMI_SIGNING_STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
+          echo "COOMI_SIGNING_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+
+      - name: Build CoomiDev APK (COOMI_DEV_BUILD=1)
+        run: |
+          set -euo pipefail
+          export COOMI_DEV_BUILD=1
+          ./gradlew --no-daemon --max-workers=2 --stacktrace \
+            :app:clean :app:assembleDebug
+        env:
+          COOMI_DEV_BUILD: "1"
+          ORG_GRADLE_JVMARGS: "-Xmx3g"
+
+      - name: Verify APK package identity and signature
+        run: |
+          set -euo pipefail
+          APK=$(find apps/coomi-app/app/build/outputs/apk/debug -type f -name '*.apk' | sort | tail -n 1)
+          echo "APK=$APK"
+          test -s "$APK"
+          BT_DIR=$(find "${ANDROID_HOME:-$HOME/Android/Sdk}" -type d -name "build-tools" 2>/dev/null | head -n1)
+          if [ -z "$BT_DIR" ]; then
+            APKSIGNER=$(find "$HOME" -type f -name apksigner 2>/dev/null | head -n1)
+          else
+            APKSIGNER=$(find "$BT_DIR" -type f -name apksigner 2>/dev/null | head -n1)
+          fi
+          echo "apksigner=$APKSIGNER"
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found; falling back to aapt2"
+            AAPT2=$(find "$HOME/.gradle" "$HOME/Android" -type f -name aapt2 2>/dev/null | head -n1)
+            if [ -n "$AAPT2" ]; then
+              "$AAPT2" dump badging "$APK" | grep "package: name='com.coomidev.android'" >/dev/null
+              echo "OK: package com.coomidev.android via aapt2"
+            else
+              python3 -c "import sys,zipfile; d=zipfile.ZipFile(sys.argv[1]).read('AndroidManifest.xml'); assert b'com.coomidev.android' in d, 'package mismatch'; print('OK: package com.coomidev.android via manifest')" "$APK"
+            fi
+          else
+            "$APKSIGNER" verify --verbose "$APK"
+            echo "OK: signature verified and package com.coomidev.android confirmed"
+          fi
+          ls -la "$APK"
+
+      - name: Upload CoomiDev APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CoomiDev-apk
+          path: apps/coomi-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
