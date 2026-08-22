@@ -125,6 +125,25 @@ jobs:
           ls -la references/termux-bootstrap/
           test -s references/termux-bootstrap/bootstrap-aarch64.zip
 
+      # Download the verified Runtime V2 artifacts (PRoot host + Debian rootfs) so
+      # stageCoomiRuntimeV2 can bundle them as APK assets for OFFLINE installation.
+      # Without these, runtime-v2-dist/ is empty (gitignored) and the APK would rely
+      # on a GitHub download at runtime, which fails in restricted networks.
+      - name: Download Runtime V2 offline artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-v2-dist
+          BASE="https://github.com/TensorHub-ORG/Coomi/releases/download/runtime-v2-debian-bookworm-20260803"
+          curl -fL -o runtime-v2-dist/proot-host-arm64.tar.gz \
+            "${BASE}/proot-host-arm64.tar.gz"
+          curl -fL -o runtime-v2-dist/debian-bookworm-arm64.tar.gz \
+            "${BASE}/debian-bookworm-arm64.tar.gz"
+          echo "--- Runtime V2 artifacts ---"
+          ls -la runtime-v2-dist/
+          test -s runtime-v2-dist/proot-host-arm64.tar.gz
+          test -s runtime-v2-dist/debian-bookworm-arm64.tar.gz
+          echo "${BASE}" > runtime-v2-dist/.base-url
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
