@@ -110,19 +110,25 @@ android {
 
     signingConfigs {
         debug {
-            storeFile file('testkey_untrusted.jks')
+            // 签名文件与口令优先级：CI 环境变量（GitHub Actions 临时 keystore）→ local.properties（本地，不入库）。
+            storeFile file(System.getenv("COOMI_SIGNING_KEYSTORE") ?: 'testkey_untrusted.jks')
             keyAlias 'alias'
-            // 签名口令从 local.properties 读取（不入库）；缺失时明确报错，禁止明文回退。
-            def signingProps = new Properties()
-            def signingPropsFile = rootProject.file('local.properties')
-            if (signingPropsFile.exists()) {
-                signingPropsFile.withInputStream { signingProps.load(it) }
+            def signingStorePassword = System.getenv("COOMI_SIGNING_STORE_PASSWORD")
+            def signingKeyPassword = System.getenv("COOMI_SIGNING_KEY_PASSWORD")
+            if (!signingStorePassword || !signingKeyPassword) {
+                def signingProps = new Properties()
+                def signingPropsFile = rootProject.file('local.properties')
+                if (signingPropsFile.exists()) {
+                    signingPropsFile.withInputStream { signingProps.load(it) }
+                }
+                signingStorePassword = signingProps.getProperty('coomi.signing.storePassword')
+                signingKeyPassword = signingProps.getProperty('coomi.signing.keyPassword')
             }
-            storePassword signingProps.getProperty('coomi.signing.storePassword')
-            keyPassword signingProps.getProperty('coomi.signing.keyPassword')
+            storePassword signingStorePassword
+            keyPassword signingKeyPassword
             if (!storePassword || !keyPassword) {
                 throw new GradleException(
-                    '签名口令缺失：请在 local.properties 配置 coomi.signing.storePassword 与 coomi.signing.keyPassword')
+                    '签名口令缺失：请通过 COOMI_SIGNING_STORE_PASSWORD/COOMI_SIGNING_KEY_PASSWORD 环境变量或 local.properties 的 coomi.signing.storePassword/coomi.signing.keyPassword 提供')
             }
             // 双保险：同时启用 v1/v2 签名。
             // v1 让 UpdateChecker 的 GET_SIGNATURES 回退路径在低版本 Android 上可用；
