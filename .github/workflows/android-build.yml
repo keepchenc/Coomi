@@ -163,6 +163,9 @@ jobs:
           # passwords. Never commit local.properties (gitignored) or the keystore.
           STORE_PASS="coomidev-ci-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
           KEY_PASS="$STORE_PASS"
+          # Remove the in-repo keystore first; keytool refuses to overwrite an
+          # existing store with a different password.
+          rm -f apps/coomi-app/app/testkey_untrusted.jks
           keytool -genkeypair \
             -v \
             -keystore apps/coomi-app/app/testkey_untrusted.jks \
