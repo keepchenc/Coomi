@@ -147,26 +147,17 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Generate ephemeral signing keystore (CI)
+      - name: Configure signing properties for debug build
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/keys"
-          KS="$RUNNER_TEMP/keys/coomidev-ci.jks"
-          STORE_PASS="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          # Official build.gradle reads signing passwords from local.properties
+          # (storeFile is the in-repo testkey_untrusted.jks). Provide non-empty
+          # throwaway passwords; never commit local.properties (it is gitignored).
+          STORE_PASS="coomidev-ci-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
           KEY_PASS="$STORE_PASS"
-          keytool -genkeypair \
-            -v \
-            -keystore "$KS" \
-            -storepass "$STORE_PASS" \
-            -keypass "$KEY_PASS" \
-            -alias alias \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 3650 \
-            -dname "CN=CoomiDev CI, OU=Mobile, O=Coomi, L=Beijing, ST=Beijing, C=CN"
-          echo "COOMI_SIGNING_KEYSTORE=$KS" >> "$GITHUB_ENV"
-          echo "COOMI_SIGNING_STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
-          echo "COOMI_SIGNING_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+          printf 'coomi.signing.storePassword=%s\ncoomi.signing.keyPassword=%s\n' \
+            "$STORE_PASS" "$KEY_PASS" > local.properties
+          echo "local.properties written (gitignored, not committed)"
 
       - name: Build CoomiDev APK (COOMI_DEV_BUILD=1)
         run: |
