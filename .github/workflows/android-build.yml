@@ -50,12 +50,19 @@ jobs:
       - name: Pin rustup toolchain and ensure Android target
         run: |
           set -euo pipefail
+          # apps/coomi-rs/rust-toolchain.toml pins channel 1.95.0; Gradle's cargo
+          # follows that file, so add the Android target to 1.95.0 in addition to
+          # the default stable. Without this, cargo gets 'can't find crate for core'.
           rustup default stable
           rustup target add aarch64-linux-android
-          rustup target list --installed | grep aarch64-linux-android
+          rustup run 1.95.0 rustup target add aarch64-linux-android 2>/dev/null || \
+            rustup +1.95.0 target add aarch64-linux-android
+          echo "--- installed targets (stable) ---"
+          rustup target list --installed | grep aarch64 || true
+          echo "--- installed targets (1.95.0) ---"
+          rustup +1.95.0 target list --installed | grep aarch64 || echo "NO_AARCH64_IN_1.95.0"
           rustc --version
-          rustc --print sysroot
-          ls "$(rustc --print sysroot)/lib/rustlib/" | grep aarch64 || echo "NO_AARCH64_IN_SYSROOT"
+          rustc +1.95.0 --version
 
       - name: Cache Gradle
         uses: actions/cache@v4
