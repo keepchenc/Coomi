@@ -154,17 +154,28 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Configure signing properties for debug build
+      - name: Generate signing keystore and properties (CI)
         run: |
           set -euo pipefail
-          # Official build.gradle reads signing passwords from local.properties
-          # (storeFile is the in-repo testkey_untrusted.jks). Provide non-empty
-          # throwaway passwords; never commit local.properties (it is gitignored).
+          # Official build.gradle signs debug with storeFile apps/coomi-app/app/testkey_untrusted.jks
+          # and reads passwords from local.properties. The in-repo testkey's password is
+          # unknown, so generate a fresh keystore at that exact path with matching throwaway
+          # passwords. Never commit local.properties (gitignored) or the keystore.
           STORE_PASS="coomidev-ci-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
           KEY_PASS="$STORE_PASS"
+          keytool -genkeypair \
+            -v \
+            -keystore apps/coomi-app/app/testkey_untrusted.jks \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
+            -alias alias \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 3650 \
+            -dname "CN=CoomiDev CI, OU=Mobile, O=Coomi, L=Beijing, ST=Beijing, C=CN"
           printf 'coomi.signing.storePassword=%s\ncoomi.signing.keyPassword=%s\n' \
             "$STORE_PASS" "$KEY_PASS" > local.properties
-          echo "local.properties written (gitignored, not committed)"
+          echo "keystore + local.properties written (both gitignored)"
 
       - name: Build CoomiDev APK (COOMI_DEV_BUILD=1)
         run: |
